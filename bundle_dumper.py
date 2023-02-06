@@ -1,133 +1,97 @@
 import UnityPy
-import time
+
 
 class BundleDumper:
-    
+
     def __init__(self, bundle_dir):
-
-        # Will store MonoScript objects that we need.
-        self.mono_scripts = {
-            "BaseProjectile"        : None,
-            "IronSights"            : None,
-            "ProjectileWeaponMod"   : None,
-            "IronSightOverride"     : None
-        }
-
-        # Will store found attachments
-        self.attachments = {}
-
-        # Load the content.bundle file
         self.env = UnityPy.load(bundle_dir)
+        print("Loaded 'content.bundle'.")
 
-        # Loop through objects in the environment
-        for obj in self.env.objects:
-
-            # Check if all MonoScripts have been found. If not, parse each MonoScript object.
-            if type(None) in [type(i) for i in list(self.mono_scripts.values())] and str(obj.type) == "ClassIDType.MonoScript":
-
-                # Read the object data.
-                data = obj.read()
-
-                # Check if data name is within our dict of wanted types
-                if not data.name in self.mono_scripts: continue
-
-                # Store the matched data
-                self.mono_scripts[data.name] = data
-    
-    def monoscripts_found(self) -> bool:
-
-        # Check if all monoscripts have been found successfully
-        return not (type(None) in [type(i) for i in list(self.mono_scripts.values())])
-    
     def dump_assets(self):
 
-        # Will store the final dump object
         dump = {
-            'weapons':{},
-            'attachments':{}
+            'weapons': {},
+            'attachments': {}
         }
 
-        # Loop through objects again.
         for obj in self.env.objects:
+            
+            # We only need objects of the GameObject type
+            if obj.type.name != "GameObject": continue
+            
+            # Here we get a file that contains scripts inside itself - this is prefab
+            # For example => assets/prefabs/weapon mods/holosight/holosight.entity.prefab
+            data = obj.read()
+            
+            if data.container is None: continue
 
-            # Check object type is GameObject
-            if str(obj.type) == "ClassIDType.GameObject":
+            # We only need weapons and attachments, we don't need anything else like pools prefabs.
+            if not('assets/prefabs/weapons' in data.container or 'assets/prefabs/weapon mods' in data.container): continue
 
-                # Read the object data
-                data = obj.read()
+            # We only need 'entity', 'viewmodel', 'attachment'. 
+            # We don't need other prefabs like '.worldmodel'
+            if not (data.name.split(".")[-1] in ['entity', 'viewmodel', 'attachment']): continue
+            
+            # We get the pure name of the prefab - either a weapon or an attachment.
+            prefab_name = data.name.partition(".")[0]
 
-                # Skip NoneType containers
-                if data.container == None: continue
+            # Here we get the nested scripts of the current prefab # PPtr
+            for component in data.m_Components:
 
-                # Skip unwanted objects
-                if not ("assets/prefabs/weapons" in data.container or "assets/prefabs/weapon mods" in data.container): continue
+                # We only need scripts of the MonoBehaviour type
+                if not (str(component.type.name) == "MonoBehaviour"): continue
 
-                # Skip unwanted prefabs
-                if not data.name.split(".")[-1] in ['entity', 'viewmodel', 'attachment']: continue
+                # Here we get the contents of the iterated script
+                cdata = component.get_obj().read()
 
-                # Get the weapon raw name
-                weapon_name = data.name.replace(".viewmodel", "").replace(".entity", "").replace(".vm.attachment", "")
+                # Here we get the type of iterated script
+                cscript = cdata.m_Script.get_obj().read().name             
 
-                # Create the weapon entry
-                if not weapon_name in dump['weapons']: dump['weapons'][weapon_name] = {}
-
-                # Create the attachment entry
-                if not weapon_name in dump['attachments']: dump['attachments'][weapon_name] = {}
-
-                # Loop through components
-                for component in data.m_Components:
+                # Weapon Handler
+                if cscript in ['IronSights', 'BaseProjectile']:
                     
-                    # Skip anything that isn't MonoBehaviour
-                    if not str(component.type) == "ClassIDType.MonoBehaviour": continue
+                    # If there is no section with the name of the iterated weapon in dump, create this section.
+                    if not (prefab_name in dump['weapons']): dump['weapons'][prefab_name] = {}
 
-                    # Get the object data
-                    cdata = component.get_obj().read()
+                    # RecoilProperties Section
+                    if cscript == "BaseProjectile":
 
-                    # Get current MonoBehaviour script name
-                    cscript = cdata.m_Script.get_obj().read().name
+                        recoil = cdata.type_tree.recoil.get_obj().read()
+
+                        if recoil.type_tree.newRecoilOverride.type.name == "MonoBehaviour":
+                            recoil = recoil.type_tree.newRecoilOverride.get_obj().read()
+
+                        type_tree = recoil.read_typetree()
+                        
+                        dump['weapons'][prefab_name]['RecoilProperties'] = type_tree
+
+                    # IronSights Section
+                    dump['weapons'][prefab_name][cscript] = cdata.read_typetree()
+
+                
+                if cscript in ['IronSightOverride', 'ProjectileWeaponMod']:
                     
-                    # Check if the script is for a weapon.
-                    if cscript in ['IronSights', 'BaseProjectile']:
+                    # If there is no section with the name of the iterated attachment in dump, create this section.
+                    if not (prefab_name in dump['attachments']): dump['attachments'][prefab_name] = {}
 
-                        # Check for the BaseProjectile script
-                        if cscript == "BaseProjectile":
+                    # Attachment Handler => Here we get a real IronSightOverride
+                    if cscript == 'IronSightOverride':
+                        if '.vm.attachment.prefab' in data.container:
+                            dump['attachments'][prefab_name][cscript] = cdata.read_typetree()
 
-                            # Get the RecoilProperties for the BaseProjectile entry
-                            recoil = cdata.type_tree.recoil.get_obj().read()
+                    # Attachment Handler => Here we get a real ProjectileWeaponMod
+                    if cscript == 'ProjectileWeaponMod':
+                        if '.entity.prefab' in data.container:
+                            dump['attachments'][prefab_name][cscript] = cdata.read_typetree()
 
-                            # We need to check for an override.
-                            if not ("Not Found" in str(recoil.type_tree.newRecoilOverride)):
+        not_weapons = [key for key in list(dump['weapons'].keys()) if len(list(dump['weapons'][key].keys())) < 3]
+        for i in not_weapons:
+            del dump['weapons'][i]
+     
+        not_attachments = [
+            key for key in list(dump['attachments'].keys())
+            if not ('IronSightOverride' in list(dump['attachments'][key].keys()) or 'ProjectileWeaponMod' in list(dump['attachments'][key].keys()))]
+        for i in not_attachments:
+            del dump['attachments'][i]
 
-                                # Update the recoil with the override.
-                                recoil = recoil.type_tree.newRecoilOverride.get_obj().read()
-
-                            # Store the data RecoilProperties for this BaseProjectile entry
-                            dump['weapons'][weapon_name]['RecoilProperties'] = recoil.read_typetree()
-
-                        # Store the data
-                        dump['weapons'][weapon_name][cscript] = cdata.read_typetree()
-                    
-                    # Check if the script is for an attachment
-                    if cscript in ['ProjectileWeaponMod', 'IronSightOverride']:
-
-                        # Store the data
-                        dump['attachments'][weapon_name][cscript] = cdata.read_typetree()
-        
-        # Determine unwanted weapons in the list.
-        unwanted = [key for key in list(dump['weapons'].keys()) if len(list(dump['weapons'][key].keys())) < 3]
-
-        # Loop through and delete all unwanted weapons
-        for j in unwanted: del dump['weapons'][j]
-
-        # Determine unwanted weapons in the list. MESSY CODE WARNING :D
-        unwanted = [
-            key for key in list(dump['attachments'].keys()) 
-            if not ('IronSightOverride' in list(dump['attachments'][key].keys()) 
-            or 'ProjectileWeaponMod'in list(dump['attachments'][key].keys()))
-        ]
-
-        # Loop through and delete all unwanted weapons
-        for j in unwanted: del dump['attachments'][j]
-
-        # Return dumped weapons
         return dump

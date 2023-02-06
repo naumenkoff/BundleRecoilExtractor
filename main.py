@@ -1,64 +1,24 @@
-from bundle_dumper import *
-from dump_parser import *
+import bundle_dumper
+import dump_parser
 import json
+import time
 
-#
-# Written by Kiwan#0617
-#
+# enter rust path here
+rust_root = 'C:\Program Files (x86)\Steam\steamapps\common\Rust'
 
-# Log what we are doing
-print("[>] Searching for required MonoScript entries.")
+start_time = time.time()
 
-# Get time before dump began
-start = time.time()
+print("Dumping weapon recoil from the game.")
 
-# Log that we need user input.
-print("[>] Enter the root path of the Rust game directory below. ex: C:\Program Files (x86)\Steam\steamapps\common\Rust")
+bdumper = bundle_dumper.BundleDumper(rust_root + r'\Bundles\shared\content.bundle')
+bparser = dump_parser.DumpParser(bdumper.dump_assets())
+dump = {
+    'weapons': bparser.parse_weapons(),
+    'attachments': bparser.parse_attachments()
+    }
 
-# Get the root path
-path = input("[<] Input: ")
+print("Found %s weapons, %s attachments." % (len(dump['weapons']), len(dump['attachments'])))
 
-# Begin dumping the bundle.
-bdumper = BundleDumper(r'%s\Bundles\shared\content.bundle' % (path))
+with open("dump.json", "w") as f_write: f_write.write(json.dumps(dump, indent=4))
 
-# Check that MonoScript entries have been found.
-if bdumper.monoscripts_found() == False:
-
-    # Log the error and exit
-    print("[!] Could not find required MonoScript entries.")
-
-    # Quit
-    exit()
-
-# Log that we found MonoScripts successfully
-print("[>] Successfully found required MonoScript entries. Time: %s seconds." % round(time.time() - start, 2))
-
-# Find weapons, attachments, and combine them.
-dump = bdumper.dump_assets()
-
-# Create a parser object
-bparser = DumpParser(dump)
-
-# Get a list of weapons
-weapons = bparser.parse_weapons()
-
-# Get a list of attachments
-attachments = bparser.parse_attachments()
-
-# Construct the dump file.
-parsed_dump = {
-    "weapons"       : weapons,
-    "attachments"   : attachments
-}
-
-# Log how many weapons and attachments were found.
-print("[>] Found %s weapons and %s attachments. Time: %s seconds." % (len(parsed_dump['weapons']), len(parsed_dump['attachments']), round(time.time() - start, 2)))
-
-# Open the file for writing
-with open("dump.json", "w") as f_write:
-
-    # Write to file
-    f_write.write(json.dumps(parsed_dump, indent=4, sort_keys=True))
-
-# Log that we wrote data to 'dump.json'
-print("[>] Wrote dump to 'dump.json'.")
+print("Bundle has been dumped. Time taken: %s seconds." % round(time.time() - start_time, 2))
